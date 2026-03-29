@@ -1,0 +1,7 @@
+conduit_log.bin
+conduit.index
+level_index
+conduit_log.txt
+__pycache__/
+*.pyc
+.DS_Store
