@@ -112,3 +112,5 @@ a 10,000 sender burst would exhaust memory before a single log hit disk.
 - No authentication on the TCP endpoint
 - write_process is synchronous — under extreme load this could
   block the processor coroutine noticeably
+- query_by_timestamp returns only the first match — multiple logs 
+  with identical timestamps (common under high load) are not all returned
