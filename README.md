@@ -41,11 +41,11 @@ Main binary file (conduit_log.bin) — each log stored as a fixed-width
 
 Fixed width means any log's position is predictable without scanning.
 
-Chronological index (conduit.index) — 12-byte binary records mapping
+Chronological index (conduit.index) — 16-byte binary records mapping
 timestamp to byte offset in the main file. Written in arrival order,
 enabling binary search on disk.
 
-Level index (level_index) — JSON mapping each severity level to a list
+Level index (level_index) — binary .idx files per severity levels mapping to a list
 of byte offsets. Enables O(1) retrieval by level without touching the
 main file.
 
@@ -108,9 +108,6 @@ a 10,000 sender burst would exhaust memory before a single log hit disk.
 ## What's missing (known limitations)
 
 - No entity index — entity queries scan the full binary file
-- No log rotation — single binary file grows indefinitely  
 - No authentication on the TCP endpoint
 - write_process is synchronous — under extreme load this could
   block the processor coroutine noticeably
-- query_by_timestamp returns only the first match — multiple logs 
-  with identical timestamps (common under high load) are not all returned

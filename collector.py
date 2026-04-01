@@ -3,14 +3,36 @@ import logging
 import json
 import socket
 import struct
+import os
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 handler = logging.FileHandler("conduit_log.txt")
 handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 logger.addHandler(handler)
-
 log_queue = None
+Megabytes = 100 * 1024 * 1024
+
+file_id = 0
+file_id_path = "file_id"
+if os.path.exists(file_id_path):
+    with open(file_id_path, 'r') as id_file:
+        file_id = int(id_file.read().strip() or 0)
+else:
+    with open(file_id_path, 'w') as id_file:
+        id_file.write('0')
+
+for dirc in ["Logs" , "Index"]:
+        if not os.path.exists(dirc):
+            os.makedirs(dirc)
+def rotate_logs(current_file):
+    global file_id
+    new_name = f"Logs/archive_{file_id}.bin"
+    os.rename(current_file, new_name)
+    file_id += 1
+    with open(file_id_path, 'w') as id_file:
+        id_file.write(str(file_id))
+
 
 def write_process(level,Timestamp,Entity_Name,Message):
     level_mapping = {
@@ -21,25 +43,23 @@ def write_process(level,Timestamp,Entity_Name,Message):
     Entity_Name = Entity_Name.encode('utf-8')[:32].ljust(32, b'\00')
     Message = Message.encode('utf-8')[:128].ljust(128, b'\00')
     record = struct.pack('!BI32s128s' , level_mapping[level], Timestamp, Entity_Name, Message)
+    try:
+        if os.path.exists("conduit_log.bin"):
+            if os.path.getsize("conduit_log.bin") > Megabytes :
+                rotate_logs("conduit_log.bin")
+    except FileNotFoundError:
+        pass
     with open("conduit_log.bin", "ab") as bin_file:
         position = bin_file.tell()
         bin_file.write(record)
     with open("conduit.index",'ab') as index_file:
-        binary_index = struct.pack('!IQ', Timestamp , position)
+        binary_index = struct.pack('!IIQ', Timestamp , file_id , position)
         index_file.write(binary_index)
-    with open("level_index",'r') as level_file:
-        level_data = json.load(level_file)
-    level_data[level].append(position)
-    with open("level_index",'w') as level_file:
-        json.dump(level_data, level_file)
+    with open(f"Index/{level}.idx" , 'ab') as index_file:
+        ID_data = struct.pack('>IQ', int(file_id), position)
+        index_file.write(ID_data)
 
 async def processor():
-    try:
-        with open("level_index",'r') as level_file:
-            pass
-    except FileNotFoundError:
-        with open("level_index",'w') as level_file:
-            json.dump({"INFO": [], "WARNING": [], "ERROR": []}, level_file)
     while True:
         level , Timestamp , Entity_name , message = await log_queue.get()
         getattr(logger, level.lower())(message)

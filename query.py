@@ -1,10 +1,10 @@
-import json
 import struct
 from datetime import datetime
 import time
+import os
 
-FORMAT = '!IQ'
-RECORD_SIZE = 12
+FORMAT = '!IIQ'
+RECORD_SIZE = 16
 
 Level_mapping = {
     1: "INFO",
@@ -20,16 +20,25 @@ def convert_to_timestamp(Timestamp):
     except ValueError:
         raise ValueError("Invalid timestamp format. Expected format: YYYY-MM-DD HH:MM:SS")
     
-def processing_logs(positions):    
+def processing_logs(data):
     logs = []
-    with open("conduit_log.bin", "rb") as f:
-        for pos in positions:
-            f.seek(pos)
-            record = f.read(165)
-            level , Timestamp, Entity_Name , Message = struct.unpack('!BI32s128s', record)
-            date_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(Timestamp))
-            logs.append((Level_mapping[level], date_time, Entity_Name.rstrip(b'\x00').decode('utf-8'), Message.rstrip(b'\x00').decode('utf-8')))
-    printing_logs(logs)  # Moved outside the loop
+    for file_id , pos in data:
+        with open("file_id" , 'r') as f_id:
+            check = f_id.read().strip()
+            print(f"{file_id} : {check}")
+            if file_id == int(check):
+                print("arrives")
+                file_name = "conduit_log.bin"
+            else:
+                file_name = f"Logs/archive_{file_id}.bin"
+               
+            with open(f"{file_name}", "rb") as f:
+                f.seek(pos)
+                record = f.read(165)
+                level , Timestamp, Entity_Name , Message = struct.unpack('!BI32s128s', record)
+                date_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(Timestamp))
+                logs.append((Level_mapping[level], date_time, Entity_Name.rstrip(b'\x00').decode('utf-8'), Message.rstrip(b'\x00').decode('utf-8')))
+    printing_logs(logs)
 def printing_logs(logs):
     for Level, Timestamp, Entity_Name, Message in logs:
         print(f" Level: {Level} , \n Timestamp: {Timestamp} , \n Entity Name: {Entity_Name} , \n Message: {Message} \n ------------------------------\n")
@@ -48,21 +57,21 @@ def query_by_range(start_time,end_time):
         while low <= high:
             mid = (low + high) // 2
             index_bin.seek(mid * RECORD_SIZE)
-            timestamp , position = struct.unpack('!IQ', index_bin.read(RECORD_SIZE))
+            timestamp , file_id , position = struct.unpack('!IIQ', index_bin.read(RECORD_SIZE))
             if timestamp >= start_ts:
                 high = mid - 1
                 start_index = mid
             else:
                 low = mid + 1
-        index_bin.seek(start_index * RECORD_SIZE)  # Fixed: multiply by RECORD_SIZE
+        index_bin.seek(start_index * RECORD_SIZE)
         while True:
             data = index_bin.read(RECORD_SIZE)
             if not data:
                 break
-            ts , pos = struct.unpack(FORMAT , data)
+            ts , f_id , pos = struct.unpack(FORMAT , data)
             if ts > end_ts:
                 break
-            offset.append(pos)
+            offset.append((f_id , pos))
     return processing_logs(offset)
             
 
@@ -71,43 +80,65 @@ def query_by_range(start_time,end_time):
     
 def query_by_timestamp(Timestamp):
     Time = convert_to_timestamp(Timestamp)
-    RECORD_SIZE = 12
     with open("conduit.index",'rb') as index_bin:
         index_bin.seek(0 , 2)
         total_records = index_bin.tell() // RECORD_SIZE
         low = 0
         high = total_records - 1
+        data = []
         while low <= high:
             mid = (low + high) // 2
             index_bin.seek(mid * RECORD_SIZE)
-            timestamp , position = struct.unpack(FORMAT, index_bin.read(RECORD_SIZE))
+            timestamp , file_id , position = struct.unpack(FORMAT, index_bin.read(RECORD_SIZE))
             if timestamp == Time:
-                return processing_logs([position])
+                print("arrives")
+                result = mid
+                high = mid - 1
             elif timestamp < Time:
                 low = mid + 1
             else:
                 high = mid - 1
-    return None
-
+        try:
+            index_bin.seek(result * RECORD_SIZE)
+            while True:
+                b_data = index_bin.read(RECORD_SIZE)
+                if len(b_data) < RECORD_SIZE:
+                    break
+                timestamp , f_id , pos = struct.unpack(FORMAT , b_data)
+                if timestamp == Time:
+                    data.append((f_id , pos))
+                else:
+                    break
+            return processing_logs(data)
+        except UnboundLocalError:
+               print("No record found")
 
 def query_by_level(Level):
-    with open("level_index",'r') as level_file:
-        level_data = json.load(level_file)
-    positions = level_data.get(Level.upper(),[])
-    return processing_logs(positions)
-
+    data = []
+    with open(f"Index/{Level}.idx" , 'rb') as level_file:
+        level_file.seek( 0 , 2)
+        total_record =  level_file.tell() // 12
+        level_file.seek(0)
+        for i in range(total_record):
+            b_data = level_file.read(12)
+            data.append(struct.unpack('>IQ' , b_data))
+        processing_logs(data)
+    
 def query_by_entity_name(Entity_Name):
-    with open("conduit_log.bin", "rb") as f:
-        logs = []
-        while True:
-            record = f.read(165)
-            if len(record) < 165:
-                break
-            level , Timestamp, Entity , Message = struct.unpack('!BI32s128s', record)
-            if Entity.rstrip(b'\x00').decode('utf-8') == Entity_Name:
-                date_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(Timestamp))
-                logs.append((Level_mapping[level], date_time, Entity.rstrip(b'\x00').decode('utf-8'), Message.rstrip(b'\x00').decode('utf-8')))
-        printing_logs(logs)
+    all_files = [f"Logs/{f}" for f in os.listdir('Logs')]
+    all_files.append("conduit_log.bin")
+    for curr_file in all_files:
+        with open(curr_file , "rb") as f:
+            logs = []
+            while True:
+                record = f.read(165)
+                if len(record) < 165:
+                    break
+                level , Timestamp, Entity , Message = struct.unpack('!BI32s128s', record)
+                if Entity.rstrip(b'\x00').decode('utf-8') == Entity_Name:
+                    date_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(Timestamp))
+                    logs.append((Level_mapping[level], date_time, Entity.rstrip(b'\x00').decode('utf-8'), Message.rstrip(b'\x00').decode('utf-8')))
+            printing_logs(logs)
 
 def search(level = None , Timestamp = None , Entity_Name = None , Range = None):
     if Timestamp:
@@ -122,4 +153,3 @@ def search(level = None , Timestamp = None , Entity_Name = None , Range = None):
     if Range:
         query_by_range(Range[0],Range[1])
 
-search(Range = ["2026-03-30 3:40:00", "2026-03-30 4:40:00"])
